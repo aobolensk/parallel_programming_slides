@@ -80,7 +80,7 @@
   \begin{itemize}
     \item Part of the C++11 thread support library (\texttt{<thread>}, \texttt{<mutex>}, etc.)
     \item Low-level, manual thread creation and management
-    \item Relies on the OS native threads under the hood
+    \item Represents a separate thread of execution; implementations usually map it to OS threads
     \item Provides:
       \begin{itemize}
         \item \texttt{std::thread} for launching threads
@@ -98,7 +98,7 @@
   \end{itemize}
   Challenges and inconveniences:
   \begin{itemize}
-    \item non-standard APIs (towards C++)
+    \item non-standard APIs from C++ Standard Library perspective
     \item platform dependent APIs
     \item verbose initialization boilerplate
     \item manual resource management
@@ -108,7 +108,8 @@
 \begin{frame}{\texttt{std::thread} history}
   \begin{itemize}
     \item C++11 (2011): Introduced \texttt{std::thread}, \texttt{std::mutex}, \texttt{std::future}, etc.
-    \item C++14/17/20: Incremental improvements (e.g., \texttt{std::hardware\_constructive\_interference\_size})
+    \item Later standards added related tools: \texttt{std::shared\_timed\_mutex} (C++14),
+      \texttt{std::shared\_mutex} (C++17), \texttt{std::jthread}, semaphores, latches and barriers (C++20)
     \item Widely adopted as the base for custom thread pools and concurrency utilities
     \item Now the foundation of many higher-level C++ concurrency libraries
   \end{itemize}
@@ -141,14 +142,14 @@
       \textbf{Pros}
       \begin{itemize}
         \item Complete control over thread creation and destruction
-        \item No hidden scheduler—behavior is predictable
+        \item No hidden library level task scheduler; you control (and responsible for) when threads are created and joined
         \item Part of standard C++, portable across platforms
         \item Good for learning fundamentals
       \end{itemize}
     \column{0.5\textwidth}
       \textbf{Cons}
       \begin{itemize}
-        \item Manual management—risk of leaks, detach/join errors
+        \item Manual management: lifetime bugs, accidental \texttt{std::terminate}, detach/join errors
         \item Verbose boilerplate for synchronization
         \item No built-in task scheduling or work-stealing
         \item Harder to scale and tune compared to higher-level APIs
@@ -168,7 +169,7 @@
     \item Member functions:
       \begin{itemize}
         \item \texttt{join()}: blocks until the thread finishes execution
-        \item \texttt{detach()}: detaches the thread to run independently
+        \item \texttt{detach()}: stops representing the thread (detaches the thread to run independently); the thread continues without blocking the caller
         \item \texttt{joinable()}: checks whether the thread can be joined
         \item \texttt{get\_id()}: returns the \texttt{std::thread::id} of the thread
       \end{itemize}
@@ -208,7 +209,7 @@ int main() {
   \end{lstlisting}
   \begin{itemize}
     \item Construct \texttt{std::thread} with a callable + optional args
-    \item Must call \texttt{join()} or \texttt{detach()} before destruction
+    \item Must call \texttt{join()} or \texttt{detach()} before destruction; otherwise the destructor calls \texttt{std::terminate}
     \item Threads are move-only: no copy construction/assignment
   \end{itemize}
 \end{frame}
@@ -216,7 +217,7 @@ int main() {
 \begin{frame}[fragile]{Managing thread lifetime}
   \begin{itemize}
     \item \texttt{join()}: waits for thread completion
-    \item \texttt{detach()}: allows thread to run independently (daemon-like)
+    \item \texttt{detach()}: allows the thread to continue independently until it finishes or the program terminates
   \end{itemize}
   \lstset{style=CStyle}
   \begin{lstlisting}
@@ -230,7 +231,7 @@ if (t.joinable()) {
     \item \texttt{joinable()}: check if thread can be joined
   \end{itemize}
   \begin{itemize}
-    \item Detached threads continue after \texttt{main}—dangerous if resources go out of scope
+    \item Detached threads are not joined at \texttt{main} exit and may outlive objects they access
     \item Always ensure each thread is either joined or detached
   \end{itemize}
 \end{frame}
@@ -272,7 +273,7 @@ int main() {
 \begin{frame}[fragile]{\texttt{std::jthread}}
   \begin{itemize}
     \item Introduced in C++20 as a safer and more convenient alternative to \texttt{std::thread}.
-    \item Automatically joins upon destruction, reducing the risk of detached threads.
+    \item On destruction, requests stop and then joins if it still represents a thread.
     \item Supports cooperative cancellation via \texttt{std::stop\_token}.
   \end{itemize}
   Example usage:
@@ -306,7 +307,7 @@ int main() {
     \item Future and promise provide a mechanism for asynchronous communication between threads
     \item A promise allows one thread to set a value or report an error
     \item The associated future retrieves the value, waiting if necessary
-    \item std::async simplifies launching asynchronous tasks without explicit thread management
+    \item \texttt{std::async} simplifies launching asynchronous tasks without explicit thread management
     \item These features promote decoupling of computation and enhance concurrency control
   \end{itemize}
 \end{frame}
@@ -316,6 +317,7 @@ int main() {
   \begin{lstlisting}
 #include <future>
 #include <iostream>
+#include <thread>
 
 int compute() {
   int result;
@@ -337,21 +339,23 @@ int main() {
 }
   \end{lstlisting}
 
-  \texttt{std::promise} sets a value (or failure)
+  \texttt{std::promise} sets a value or exception
 
   \texttt{std::future} retrieves it on demand
 \end{frame}
 
 \begin{frame}[fragile]{Using \texttt{std::async}}
   \begin{itemize}
-    \item Launches tasks asynchronously and returns a \texttt{std::future}
-    \item Can run immediately in a new thread or be deferred until needed
+    \item Launches a task and returns a \texttt{std::future}
+    \item With default policy, may run in a new thread or be deferred until a waiting function is called
     \item Simplifies asynchronous programming by handling thread management
   \end{itemize}
   \lstset{style=CStyle}
   \begin{lstlisting}
 #include <future>
 #include <iostream>
+#include <thread>
+#include <chrono>
 
 int computeSquare(int x) {
   // Simulate heavy computation
@@ -376,7 +380,7 @@ int main() {
 int computeCube(int x) { ... }
 
 int main() {
-  // Using deferred launch: execution is postponed until get() is called
+  // Using deferred launch: execution is postponed until get() or wait() is called
   std::future<int> futDeferred = std::async(std::launch::deferred, computeCube, 3);
   std::cout << "Deferred result: " << futDeferred.get() << std::endl;
   
@@ -542,21 +546,42 @@ int main() {
   \texttt{std::atomic} provides lock-free operations. Use \texttt{fetch\_add} method and load to operate on atomic variables safely
 \end{frame}
 
+\begin{frame}{Other synchronization primitives}
+  \begin{itemize}
+    \item Mutex variants:
+      \begin{itemize}
+        \item \texttt{std::timed\_mutex}: lock with timeout or deadline
+        \item \texttt{std::recursive\_mutex}: same thread may lock multiple times
+        \item \texttt{std::shared\_mutex}: many readers or one writer
+      \end{itemize}
+    \item One-time initialization:
+      \begin{itemize}
+        \item \texttt{std::once\_flag} and \texttt{std::call\_once}
+      \end{itemize}
+    \item C++20 coordination primitives:
+      \begin{itemize}
+        \item \texttt{std::counting\_semaphore}, \texttt{std::binary\_semaphore}: permit-based access
+        \item \texttt{std::latch}: one-shot countdown
+        \item \texttt{std::barrier}: reusable phase synchronization
+      \end{itemize}
+  \end{itemize}
+\end{frame}
+
 \section{Best practices and recommendations}
 
 \begin{frame}{Best practices and recommendations}
   \begin{itemize}
-    \item Always join or detach threads before destruction
-    \item Prefer RAII wrappers (\texttt{std::lock\_guard}, \texttt{std::unique\_lock})
-    \item Minimize shared state; prefer message passing or futures
-    \item Be cautious with detached threads, manage lifetimes carefully
-    \item Consider higher-level thread pools (e.g., \texttt{std::async})
+    \item Always join or detach \texttt{std::thread} objects before destruction; otherwise \texttt{std::terminate} is called
+    \item Prefer \texttt{std::jthread} in C++20 when automatic stop request and join behavior is appropriate
+    \item Prefer RAII locking wrappers and keep critical sections small
+    \item Minimize shared state; prefer futures, promises, \texttt{std::async}
+    \item Be cautious with detached threads; make ownership and lifetimes explicit
   \end{itemize}
 \end{frame}
 
 \begin{frame}{When and where to use \texttt{std::thread} in real world scenarios}
   \begin{itemize}
-    \item Fine-grained control over threading
+    \item Fine-grained control over thread lifetime and execution
     \item Building custom schedulers or thread pools
     \item Interfacing directly with OS thread APIs
     \item Performance critical sections where you avoid scheduler overhead
